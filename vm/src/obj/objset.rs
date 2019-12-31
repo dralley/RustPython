@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::fmt;
 
-use super::objlist::PyListIterator;
+use super::objiter;
 use super::objtype::{self, PyClassRef};
 use crate::dictdatatype;
 use crate::function::OptionalArg;
@@ -236,13 +236,8 @@ impl PySetInner {
         Ok(true)
     }
 
-    fn iter(&self, vm: &VirtualMachine) -> PyListIterator {
-        let items = self.content.keys().collect();
-        let set_list = vm.ctx.new_list(items);
-        PyListIterator {
-            position: Cell::new(0),
-            list: set_list.downcast().unwrap(),
-        }
+    fn iter(&self, vm: &VirtualMachine) -> PySetIterator {
+        PySetIterator::new(self)
     }
 
     fn repr(&self, vm: &VirtualMachine) -> PyResult<String> {
@@ -478,7 +473,7 @@ impl PySet {
     }
 
     #[pymethod(name = "__iter__")]
-    fn iter(&self, vm: &VirtualMachine) -> PyListIterator {
+    fn iter(&self, vm: &VirtualMachine) -> PySetIterator {
         self.inner.borrow().iter(vm)
     }
 
@@ -734,7 +729,7 @@ impl PyFrozenSet {
     }
 
     #[pymethod(name = "__iter__")]
-    fn iter(&self, vm: &VirtualMachine) -> PyListIterator {
+    fn iter(&self, vm: &VirtualMachine) -> PySetIterator {
         self.inner.iter(vm)
     }
 
@@ -752,8 +747,57 @@ impl PyFrozenSet {
     }
 }
 
+
 struct SetIterable {
     iterable: PyIterable,
+}
+
+#[pyclass]
+#[derive(Debug)]
+struct PySetIterator {
+    pub set: PySetInner,
+    pub size: dictdatatype::DictSize,
+    pub position: Cell<usize>,
+}
+
+#[pyimpl]
+impl PySetIterator {
+    fn new(set: &PySetInner) -> Self {
+        PySetIterator {
+            set: set,
+            position: Cell::new(0),
+            size: set.inner.borrow().content.size(),
+        }
+    }
+
+    #[pymethod(name = "__next__")]
+    fn next(&self, vm: &VirtualMachine) -> PyResult {
+        let mut position = self.position.get();
+        let dict = &self.set.inner.borrow().content;
+        if dict.has_changed_size(&self.size) {
+            return Err(vm.new_exception_msg(
+                vm.ctx.exceptions.runtime_error.clone(),
+                "set changed size during iteration".to_string(),
+            ));
+        }
+        match dict.next_entry(&mut position) {
+            Some((key, _)) => {
+                Ok(key.clone())
+            }
+            None => Err(objiter::new_stop_iteration(vm)),
+        }
+    }
+
+    #[pymethod(name = "__iter__")]
+    fn iter(zelf: PyRef<Self>, _vm: &VirtualMachine) -> PyRef<Self> {
+        zelf
+    }
+}
+
+impl PyValue for PySetIterator {
+    fn class(vm: &VirtualMachine) -> PyClassRef {
+        vm.ctx.types.setiterator_type.clone()
+    }
 }
 
 impl TryFromObject for SetIterable {
@@ -773,7 +817,49 @@ impl TryFromObject for SetIterable {
     }
 }
 
+// // Implement IntoIterator so that we can easily iterate sets from rust code.
+// impl IntoIterator for PySetRef {
+//     type Item = PyObjectRef;
+//     type IntoIter = SetIter;
+
+//     fn into_iter(self) -> Self::IntoIter {
+//         SetIter::new(self)
+//     }
+// }
+
+// impl IntoIterator for &PySetRef {
+//     type Item = PyObjectRef;
+//     type IntoIter = SetIter;
+
+//     fn into_iter(self) -> Self::IntoIter {
+//         SetIter::new(self.clone())
+//     }
+// }
+
+// pub struct SetIter {
+//     set: PySetRef,
+//     position: usize,
+// }
+
+// impl SetIter {
+//     pub fn new(set: PySetRef) -> SetIter {
+//         SetIter { set, position: 0 }
+//     }
+// }
+
+// impl Iterator for SetIter {
+//     type Item = PyObjectRef;
+
+//     fn next(&mut self) -> Option<Self::Item> {
+//         let item = self.set.inner.borrow().content.get(self.position).cloned();
+//         self.position += 1;
+//         item
+//     }
+// }
+
 pub fn init(context: &PyContext) {
     PySet::extend_class(context, &context.types.set_type);
     PyFrozenSet::extend_class(context, &context.types.frozenset_type);
+
+    PySetIterator::extend_class(context, &context.types.setiterator_type);
 }
