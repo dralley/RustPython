@@ -419,6 +419,161 @@ impl PyItertoolsTakewhile {
 
 #[pyclass]
 #[derive(Debug)]
+struct PyItertoolsGroupby {
+    iterable: PyObjectRef,
+    keyfunc: PyObjectRef,
+    tgtkey: RefCell<Option<PyObjectRef>>,
+    currkey: RefCell<Option<PyObjectRef>>,
+    currvalue: RefCell<Option<PyObjectRef>>,
+}
+
+impl PyValue for PyItertoolsGroupby {
+    fn class(vm: &VirtualMachine) -> PyClassRef {
+        vm.class("itertools", "groupby")
+    }
+}
+
+// class groupby:
+//     # [k for k, g in groupby('AAAABBBCCDAABBB')] --> A B C D A B
+//     # [list(g) for k, g in groupby('AAAABBBCCD')] --> AAAA BBB CC D
+//     def __init__(self, iterable, key=None):
+//         if key is None:
+//             key = lambda x: x
+//         self.keyfunc = key
+//         self.it = iter(iterable)
+//         self.tgtkey = self.currkey = self.currvalue = object()
+//     def __iter__(self):
+//         return self
+//     def __next__(self):
+//         self.id = object()
+//         while self.currkey == self.tgtkey:
+//             self.currvalue = next(self.it)    # Exit on StopIteration
+//             self.currkey = self.keyfunc(self.currvalue)
+//         self.tgtkey = self.currkey
+//         return (self.currkey, self._grouper(self.tgtkey, self.id))
+//     def _grouper(self, tgtkey, id):
+//         while self.id is id and self.currkey == tgtkey:
+//             yield self.currvalue
+//             try:
+//                 self.currvalue = next(self.it)
+//             except StopIteration:
+//                 return
+//             self.currkey = self.keyfunc(self.currvalue)
+
+#[pyimpl]
+impl PyItertoolsGroupby {
+    #[pyslot]
+    fn tp_new(
+        cls: PyClassRef,
+        iterable: PyObjectRef,
+        keyfunc: OptionalOption<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyRef<Self>> {
+        let iter = get_iter(vm, &iterable)?;
+
+        let keyfunc = match keyfunc.flat_option() {
+            Some(func) => func,
+            None => vm.ctx.none(),
+        };
+
+        PyItertoolsGroupby {
+            iterable: iter,
+            keyfunc: keyfunc,
+            tgtkey: RefCell::new(None),
+            currkey: RefCell::new(None),
+            currvalue: RefCell::new(None),
+        }
+        .into_ref_with_type(vm, cls)
+    }
+
+    #[pymethod(name = "__next__")]
+    fn next(&self, vm: &VirtualMachine) -> PyResult {
+        self._skip_to_next_iteration_group();
+        self.tgtkey.replace(self.currkey.into_inner());
+        let grouper = GroupByIterator { groupby: self, tgtkey: self.tgtkey };
+        vm.ctx.new_tuple(key, grouper);
+    }
+
+    fn _skip_to_next_iteration_group(&self, vm: &VirtualMachine) {
+        while True:
+            if self.w_currkey is None:
+                pass
+            elif self.w_tgtkey is None:
+                break
+            else:
+                if not space.eq_w(self.w_tgtkey, self.w_currkey):
+                    break
+
+            w_newvalue = space.next(self.w_iterator)
+            if space.is_w(self.w_keyfunc, space.w_None):
+                w_newkey = w_newvalue
+            else:
+                w_newkey = space.call_function(self.w_keyfunc, w_newvalue)
+
+            self.w_currkey = w_newkey
+            self.w_currvalue = w_newvalue
+    }
+
+    #[pymethod(name = "__iter__")]
+    fn iter(zelf: PyRef<Self>, _vm: &VirtualMachine) -> PyRef<Self> {
+        zelf
+    }
+}
+
+#[pyclass]
+#[derive(Debug)]
+struct GroupByIterator {
+    groupby: &PyItertoolsGroupby,
+    tgtkey: PyObjectRef,
+}
+
+#[pyimpl]
+impl GroupByIterator {
+    #[pyslot]
+    fn tp_new(
+        cls: PyClassRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyRef<Self>> {
+        let iter = get_iter(vm, &iterable)?;
+
+        GroupByIterator {
+            iterable: iter,
+        }
+        .into_ref_with_type(vm, cls)
+    }
+
+    #[pymethod(name = "__iter__")]
+    fn iter(zelf: PyRef<Self>, _vm: &VirtualMachine) -> PyRef<Self> {
+        zelf
+    }
+
+}
+
+//     def next_w(self):
+//         groupby = self.groupby
+//         space = groupby.space
+//         if groupby.w_currvalue is None:
+//             w_newvalue = space.next(groupby.w_iterator)
+//             if space.is_w(groupby.w_keyfunc, space.w_None):
+//                 w_newkey = w_newvalue
+//             else:
+//                 w_newkey = space.call_function(groupby.w_keyfunc, w_newvalue)
+//             #assert groupby.w_currvalue is None
+//             # ^^^ check disabled, see http://bugs.python.org/issue30347
+//             groupby.w_currkey = w_newkey
+//             groupby.w_currvalue = w_newvalue
+
+//         assert groupby.w_currkey is not None
+//         if not space.eq_w(self.w_tgtkey, groupby.w_currkey):
+//             raise OperationError(space.w_StopIteration, space.w_None)
+//         w_result = groupby.w_currvalue
+//         groupby.w_currvalue = None
+//         groupby.w_currkey = None
+//         return w_result
+
+
+#[pyclass]
+#[derive(Debug)]
 struct PyItertoolsDropwhile {
     predicate: PyCallable,
     iterable: PyObjectRef,
@@ -1369,6 +1524,9 @@ pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
     let filterfalse = ctx.new_class("filterfalse", ctx.object());
     PyItertoolsFilterFalse::extend_class(ctx, &filterfalse);
 
+    let groupby = ctx.new_class("filterfalse", ctx.object());
+    PyItertoolsGroupby::extend_class(ctx, &groupby);
+
     let permutations = ctx.new_class("permutations", ctx.object());
     PyItertoolsPermutations::extend_class(ctx, &permutations);
 
@@ -1400,6 +1558,7 @@ pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
         "dropwhile" => dropwhile,
         "islice" => islice,
         "filterfalse" => filterfalse,
+        "groupby" => groupby,
         "repeat" => repeat,
         "starmap" => starmap,
         "takewhile" => takewhile,

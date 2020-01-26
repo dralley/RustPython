@@ -499,3 +499,42 @@ assert next(it) == (1, 3)
 assert next(it) == (2, None)
 with assert_raises(StopIteration):
     next(it)
+
+
+# test itertools.groupby
+
+# Check whether it accepts arguments correctly
+assert [] == list(itertools.groupby([]))
+assert [] == list(itertools.groupby([], key=id))
+
+with assert_raises(TypeError):
+    list(itertools.groupby('abc', []))
+with assert_raises(TypeError):
+    itertools.groupby(None)
+with assert_raises(TypeError):
+    itertools.groupby('abc', lambda x:x, 10)
+
+# Check normal input
+s = [(0, 10, 20), (0, 11,21), (0,12,21), (1,13,21), (1,14,22),
+        (2,15,22), (3,16,23), (3,17,23)]
+dup = []
+for k, g in itertools.groupby(s, lambda r:r[0]):
+    for elem in g:
+        assert k == elem[0]
+        dup.append(elem)
+assert s == dup
+
+# Exercise pipes and filters style
+s = 'abracadabra'
+# sort s | uniq
+r = [k for k, g in itertools.groupby(sorted(s))]
+assert r == ['a', 'b', 'c', 'd', 'r']
+# sort s | uniq -d
+r = [k for k, g in itertools.groupby(sorted(s)) if list(itertools.islice(g,1,2))]
+assert r == ['a', 'b', 'r']
+# sort s | uniq -c
+r = [(len(list(g)), k) for k, g in itertools.groupby(sorted(s))]
+assert r == [(5, 'a'), (2, 'b'), (1, 'c'), (1, 'd'), (2, 'r')]
+# sort s | uniq -c | sort -rn | head -3
+r = sorted([(len(list(g)) , k) for k, g in itertools.groupby(sorted(s))], reverse=True)[:3]
+assert r == [(5, 'a'), (2, 'r'), (2, 'b')]
